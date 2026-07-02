@@ -1,0 +1,1 @@
+console.log('TabWeave content script loaded');
