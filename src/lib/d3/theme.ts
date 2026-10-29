@@ -20,10 +20,14 @@ export function getNodeFill(node: NodeRecord): string {
   return '#0f172a';
 }
 
-export function getEdgeStroke(edge: EdgeRecord): string {
+export function getEdgeStroke(edge: Pick<EdgeRecord, 'kind'>): string {
   if (edge.kind === 'causal') return '#71717a';
   if (edge.kind === 'heuristic') return '#6366f1';
   return '#52525b';
+}
+
+export function getEdgeWidth(edge: Pick<EdgeRecord, 'confidence'>): number {
+  return edge.confidence === 'high' ? 1.8 : 1.3;
 }
 
 export function getEdgeDasharray(edge: EdgeRecord): string | null {

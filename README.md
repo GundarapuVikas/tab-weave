@@ -6,8 +6,9 @@ TabWeave is a Chrome/Chromium browser extension that captures tab activity and t
 
 - Tracks browser tab and navigation events in the background service worker
 - Stores session and graph data locally with IndexedDB
-- Visualizes the recorded graph in the extension popup with D3
-- Lets you refresh the graph or clear stored browsing data from the popup UI
+- Visualizes the recorded graph in the extension popup with D3, including zoom, pan, and arrowed lineage edges
+- Inspects a selected node's URL, status, parent/child tabs, and event counts, with one-click navigation to related nodes or opening the URL in a new tab
+- Lets you refresh the graph or clear stored browsing data from the popup UI; clearing starts a fresh session seeded from the tabs that are currently open
 
 ## Tech stack
 
@@ -27,6 +28,7 @@ TabWeave is a Chrome/Chromium browser extension that captures tab activity and t
    ```bash
    npm run dev
    ```
+   This runs `vite build --watch` and rebuilds `dist/` on every change. There is no dev server, so reload the extension from chrome://extensions after a rebuild to pick up the new code.
 3. Run the type checker:
    ```bash
    npm run typecheck

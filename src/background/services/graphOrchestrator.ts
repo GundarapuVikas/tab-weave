@@ -1,7 +1,7 @@
 /// <reference types="chrome" />
 
 import { GRAPH_DEFAULTS } from '../../shared/constants';
-import type { PendingTabCreate, RecentNavigation } from '../../shared/types';
+import type { PendingTabCreate, RecentNavigation, SessionRecord } from '../../shared/types';
 import { createEdge } from '../../lib/db/repositories/edgeRepository';
 import { createNode, getNodesByTabId, updateNode } from '../../lib/db/repositories/nodeRepository';
 import { wouldCreateCycle } from '../../lib/graph/cycleDetection';
@@ -13,6 +13,7 @@ import { ensureActiveSession } from '../bootstrap';
 import { logEvent } from './eventLogger';
 import { resolveParentForPendingTab } from './parentResolver';
 import { runtimeCache } from './runtimeCache';
+import { isCurrentSession } from './sessionState';
 
 type TabUpdateLike = {
   status?: string;
@@ -21,23 +22,31 @@ type TabUpdateLike = {
   favIconUrl?: string;
 };
 
-export async function seedExistingTabs(): Promise<void> {
-  const session = await ensureActiveSession();
+export async function seedExistingTabs(session?: SessionRecord): Promise<void> {
+  const targetSession = session ?? (await ensureActiveSession());
   const tabs = await chrome.tabs.query({});
 
   for (const tab of tabs) {
+    if (!isCurrentSession(targetSession.id)) {
+      logger.warn('Abandoned tab seeding because the session changed');
+      return;
+    }
+
     if (tab.id === undefined || tab.id < 0) {
       continue;
     }
 
-    const existingTabKey = runtimeCache.getTabKey(tab.id);
+    const cachedTabKey = runtimeCache.getTabKey(tab.id);
+    const cachedNode = cachedTabKey ? runtimeCache.getNode(cachedTabKey) : undefined;
 
-    if (existingTabKey) {
+    if (cachedNode?.sessionId === targetSession.id && cachedNode.status === 'open') {
       continue;
     }
 
     const existingNodes = await getNodesByTabId(tab.id);
-    const existingInSession = existingNodes.find((node) => node.sessionId === session.id);
+    const existingInSession = existingNodes.find(
+      (node) => node.sessionId === targetSession.id && node.status === 'open',
+    );
 
     if (existingInSession) {
       runtimeCache.setTabKey(tab.id, existingInSession.id);
@@ -46,10 +55,10 @@ export async function seedExistingTabs(): Promise<void> {
     }
 
     const createdAt = now();
-    const tabKey = createTabKey(session.id, tab.id, createdAt);
+    const tabKey = createTabKey(targetSession.id, tab.id, createdAt);
 
     const node = await createNode({
-      sessionId: session.id,
+      sessionId: targetSession.id,
       tabId: tab.id,
       windowId: tab.windowId,
       url: tab.url ?? GRAPH_DEFAULTS.fallbackUrl,
@@ -63,11 +72,16 @@ export async function seedExistingTabs(): Promise<void> {
       createdAt,
     });
 
+    if (!isCurrentSession(targetSession.id)) {
+      logger.warn('Abandoned tab seeding because the session changed');
+      return;
+    }
+
     runtimeCache.setTabKey(tab.id, node.id);
     runtimeCache.setNode(node);
 
     await logEvent({
-      sessionId: session.id,
+      sessionId: targetSession.id,
       timestamp: createdAt,
       type: 'TAB_CREATED',
       tabId: tab.id,

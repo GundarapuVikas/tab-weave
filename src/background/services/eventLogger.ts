@@ -3,6 +3,7 @@ import { putEvent } from '../../lib/db/repositories/eventRepository';
 import { createId } from '../../lib/utils/id';
 import { logger } from '../../lib/utils/logger';
 import { writeQueue } from '../queues/writeQueue';
+import { isCurrentSession } from './sessionState';
 
 type LogEventInput = Omit<EventRecord, 'id'>;
 
@@ -11,6 +12,15 @@ export async function logEvent(input: LogEventInput): Promise<EventRecord> {
     id: createId('event'),
     ...input,
   };
+
+  if (!isCurrentSession(event.sessionId)) {
+    logger.debug('Dropped event for stale session', {
+      type: event.type,
+      sessionId: event.sessionId,
+    });
+
+    return event;
+  }
 
   writeQueue.enqueue(async () => {
     await putEvent(event);

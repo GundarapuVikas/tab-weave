@@ -20,6 +20,27 @@ async function sendRuntimeMessage<TResponse>(message: unknown): Promise<TRespons
   return response as TResponse;
 }
 
+function graphSignature(graph: GraphPayload): string {
+  return JSON.stringify({
+    sessionId: graph.session?.id ?? null,
+    nodes: graph.nodes
+      .map((node) => [
+        node.id,
+        node.status,
+        node.title,
+        node.url,
+        node.favIconUrl ?? null,
+        node.depth,
+        node.isRoot,
+        node.sourceKind,
+      ])
+      .sort((a, b) => a.join('\u0001').localeCompare(b.join('\u0001'))),
+    edges: graph.edges
+      .map((edge) => [edge.id, edge.from, edge.to, edge.kind, edge.confidence])
+      .sort((a, b) => a.join('\u0001').localeCompare(b.join('\u0001'))),
+  });
+}
+
 export function useGraphData(): UseGraphDataResult {
   const [graph, setGraph] = useState<GraphPayload | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -43,7 +64,15 @@ export function useGraphData(): UseGraphDataResult {
         throw new Error(response.error);
       }
 
-      setGraph(response.data);
+      // Keep the previous object when nothing visible changed, so the graph
+      // does not rebuild and re-animate on every polling tick.
+      setGraph((current) => {
+        if (current && graphSignature(current) === graphSignature(response.data)) {
+          return current;
+        }
+
+        return response.data;
+      });
 
       if (selectedNodeId) {
         const stillExists = response.data.nodes.some((node) => node.id === selectedNodeId);

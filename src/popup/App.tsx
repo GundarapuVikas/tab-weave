@@ -22,18 +22,13 @@ export default function App() {
   const edgeCount = graph?.edges.length ?? 0;
 
   return (
-    <main className="min-h-screen bg-zinc-950 px-4 py-4 text-zinc-50">
-      <div className="mx-auto flex min-h-[600px] max-w-6xl flex-col gap-4">
-        <header className="rounded-2xl border border-zinc-800 bg-zinc-900/80 px-5 py-4 shadow-2xl shadow-black/20">
+    <main className="min-h-0 bg-zinc-950 px-3 py-3 text-zinc-50">
+      <div className="mx-auto flex flex-col gap-2.5">
+        <header className="rounded-2xl border border-zinc-800 bg-zinc-900/80 px-4 py-2 shadow-2xl shadow-black/20">
           <div className="flex items-center justify-between gap-4">
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight text-zinc-50">TabWeave</h1>
-              <p className="mt-1 text-sm text-zinc-400">
-                Causal browsing graph from live Chrome tab lineage
-              </p>
-            </div>
+            <h1 className="text-lg font-semibold tracking-tight text-zinc-50">TabWeave</h1>
 
-            <div className="rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+            <div className="rounded-full border border-zinc-800 bg-zinc-950 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-zinc-500">
               MV3 • D3 • IndexedDB
             </div>
           </div>
@@ -64,14 +59,18 @@ export default function App() {
         )}
 
         {state === 'ready' && graph && graph.nodes.length > 0 && (
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="flex flex-col gap-2.5">
             <GraphView
               nodes={graph.nodes}
               edges={graph.edges}
               selectedNodeId={selectedNodeId}
-              onSelectNode={(nodeId) => void selectNode(nodeId)}
+              onSelectNode={selectNode}
             />
-            <NodeInspector details={selectedNodeDetails} />
+            <NodeInspector
+              details={selectedNodeDetails}
+              nodes={graph.nodes}
+              onSelectNode={selectNode}
+            />
           </div>
         )}
       </div>

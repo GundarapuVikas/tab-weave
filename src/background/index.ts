@@ -9,46 +9,57 @@ import { registerNavigationTracker } from './trackers/navigationTracker';
 import { registerSessionTracker } from './trackers/sessionTracker';
 import { registerTabTracker } from './trackers/tabTracker';
 
-let trackersRegistered = false;
-let routerRegistered = false;
+let initializationPromise: Promise<void> | null = null;
 
-function registerTrackers(): void {
-  if (trackersRegistered) {
-    return;
+function initializeBackground(): Promise<void> {
+  if (!initializationPromise) {
+    initializationPromise = (async () => {
+      await ensureActiveSession();
+      await seedExistingTabs();
+      logger.info('Background initialized');
+    })().catch((error) => {
+      // Allow a later event to retry after a transient IndexedDB failure.
+      initializationPromise = null;
+      throw error;
+    });
   }
 
-  registerSessionTracker();
-  registerActivationTracker();
-  registerTabTracker();
-  registerNavigationTracker();
-
-  trackersRegistered = true;
+  return initializationPromise;
 }
 
-function registerRouter(): void {
-  if (routerRegistered) {
-    return;
+async function startNewSession(): Promise<void> {
+  try {
+    await initializeBackground();
+  } catch (error) {
+    logger.error('Initialization failed before session bootstrap', error);
   }
 
-  registerMessageRouter();
-  routerRegistered = true;
-}
-
-async function initializeBackground(): Promise<void> {
-  await ensureActiveSession();
-  registerRouter();
-  registerTrackers();
+  await bootstrapExtension();
   await seedExistingTabs();
 
-  logger.info('Background initialized');
+  logger.info('Session bootstrapped');
 }
 
+// Chrome requires listeners to be registered synchronously during module
+// evaluation so events that wake the service worker are not dropped.
+registerMessageRouter();
+registerActivationTracker();
+registerTabTracker();
+registerNavigationTracker();
+registerSessionTracker();
+
 chrome.runtime.onInstalled.addListener(() => {
-  void bootstrapExtension();
+  void startNewSession().catch((error) => {
+    logger.error('onInstalled bootstrap failed', error);
+  });
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  void bootstrapExtension();
+  void startNewSession().catch((error) => {
+    logger.error('onStartup bootstrap failed', error);
+  });
 });
 
-void initializeBackground();
+void initializeBackground().catch((error) => {
+  logger.error('Background initialization failed', error);
+});

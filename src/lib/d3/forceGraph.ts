@@ -1,5 +1,5 @@
 import * as d3 from 'd3';
-import type { EdgeRecord, NodeRecord } from '../../shared/types';
+import type { EdgeKind, EdgeRecord, NodeRecord } from '../../shared/types';
 import { createNodeDrag } from './drag';
 import { truncateLabel } from './labels';
 import { createSimulation, type GraphLinkDatum, type GraphNodeDatum } from './simulation';
@@ -7,6 +7,7 @@ import {
   getEdgeDasharray,
   getEdgeOpacity,
   getEdgeStroke,
+  getEdgeWidth,
   getNodeFill,
   getNodeRadius,
   getNodeStroke,
@@ -19,7 +20,6 @@ interface ForceGraphOptions {
   height: number;
   nodes: NodeRecord[];
   edges: EdgeRecord[];
-  selectedNodeId: string | null;
   onNodeClick: (nodeId: string) => void;
 }
 
@@ -29,7 +29,6 @@ export function renderForceGraph({
   height,
   nodes,
   edges,
-  selectedNodeId,
   onNodeClick,
 }: ForceGraphOptions): () => void {
   const root = d3.select(svg);
@@ -60,6 +59,24 @@ export function renderForceGraph({
     .join('feMergeNode')
     .attr('in', (d) => d);
 
+  const arrowKinds: EdgeKind[] = ['causal', 'heuristic', 'reference'];
+
+  for (const kind of arrowKinds) {
+    defs
+      .append('marker')
+      .attr('id', `tabweave-arrow-${kind}`)
+      .attr('viewBox', '0 0 10 10')
+      .attr('refX', 10)
+      .attr('refY', 5)
+      .attr('markerWidth', 7)
+      .attr('markerHeight', 7)
+      .attr('orient', 'auto')
+      .attr('markerUnits', 'userSpaceOnUse')
+      .append('path')
+      .attr('d', 'M0,0 L10,5 L0,10 Z')
+      .attr('fill', getEdgeStroke({ kind }));
+  }
+
   const graphLayer = root.append('g');
   const edgeLayer = graphLayer.append('g');
   const nodeLayer = graphLayer.append('g');
@@ -82,6 +99,9 @@ export function renderForceGraph({
     graphLayer.attr('transform', event.transform.toString());
   });
 
+  // The <svg> persists across rebuilds; reset d3-zoom's internal transform so
+  // it matches the freshly created (identity) graph layer.
+  root.property('__zoom', d3.zoomIdentity);
   root.call(zoom);
 
   const linkSelection = edgeLayer
@@ -90,14 +110,17 @@ export function renderForceGraph({
     .join('line')
     .attr('stroke', (d) => getEdgeStroke(d.data))
     .attr('stroke-opacity', (d) => getEdgeOpacity(d.data))
-    .attr('stroke-width', (d) => (d.data.confidence === 'high' ? 1.8 : 1.3))
+    .attr('stroke-width', (d) => getEdgeWidth(d.data))
     .attr('stroke-dasharray', (d) => getEdgeDasharray(d.data))
-    .attr('stroke-linecap', 'round');
+    .attr('stroke-linecap', 'round')
+    // Parent -> child: the arrow belongs at the target end.
+    .attr('marker-end', (d) => `url(#tabweave-arrow-${d.data.kind})`);
 
   const nodeSelection = nodeLayer
     .selectAll<SVGGElement, GraphNodeDatum>('g')
     .data(nodeData, (d) => d.id)
     .join('g')
+    .attr('data-node-id', (d) => d.id)
     .attr('cursor', 'pointer')
     .call(createNodeDrag(simulation))
     .on('click', (_event, d) => {
@@ -109,8 +132,8 @@ export function renderForceGraph({
     .attr('r', (d) => getNodeRadius(d.data))
     .attr('fill', (d) => getNodeFill(d.data))
     .attr('stroke', (d) => getNodeStroke(d.data))
-    .attr('stroke-width', (d) => (selectedNodeId === d.id ? 2.6 : 1.4))
-    .attr('filter', (d) => (selectedNodeId === d.id || d.data.isRoot ? 'url(#tabweave-node-glow)' : null));
+    .attr('stroke-width', 1.4)
+    .attr('filter', (d) => (d.data.isRoot ? 'url(#tabweave-node-glow)' : null));
 
   nodeSelection
     .append('text')
@@ -125,11 +148,24 @@ export function renderForceGraph({
   nodeSelection.append('title').text((d) => `${d.data.title}\n${d.data.url}`);
 
   const tick = () => {
-    linkSelection
-      .attr('x1', (d) => (d.source as GraphNodeDatum).x ?? 0)
-      .attr('y1', (d) => (d.source as GraphNodeDatum).y ?? 0)
-      .attr('x2', (d) => (d.target as GraphNodeDatum).x ?? 0)
-      .attr('y2', (d) => (d.target as GraphNodeDatum).y ?? 0);
+    linkSelection.each(function (d) {
+      const source = d.source as GraphNodeDatum;
+      const target = d.target as GraphNodeDatum;
+      const sourceX = source.x ?? 0;
+      const sourceY = source.y ?? 0;
+      const targetX = target.x ?? 0;
+      const targetY = target.y ?? 0;
+      const deltaX = targetX - sourceX;
+      const deltaY = targetY - sourceY;
+      const distance = Math.hypot(deltaX, deltaY) || 1;
+      const inset = Math.min(getNodeRadius(target.data) + 4, distance * 0.45);
+
+      d3.select(this)
+        .attr('x1', sourceX)
+        .attr('y1', sourceY)
+        .attr('x2', targetX - (deltaX / distance) * inset)
+        .attr('y2', targetY - (deltaY / distance) * inset);
+    });
 
     nodeSelection.attr('transform', (d) => `translate(${d.x ?? 0}, ${d.y ?? 0})`);
   };
@@ -148,4 +184,59 @@ export function renderForceGraph({
     root.on('.zoom', null);
     root.selectAll('*').remove();
   };
+}
+
+/** Updates selection styling without recreating the simulation. */
+export function updateGraphSelection(
+  svg: SVGSVGElement,
+  selectedNodeId: string | null,
+): void {
+  const root = d3.select(svg);
+  const relatedNodeIds = new Set<string>();
+  const relatedEdgeIds = new Set<string>();
+  const linkSelection = root.selectAll<SVGLineElement, GraphLinkDatum>('line');
+
+  if (selectedNodeId) {
+    linkSelection.each((d) => {
+      if (d.data.to === selectedNodeId) {
+        relatedNodeIds.add(d.data.from);
+        relatedEdgeIds.add(d.data.id);
+      }
+
+      if (d.data.from === selectedNodeId) {
+        relatedNodeIds.add(d.data.to);
+        relatedEdgeIds.add(d.data.id);
+      }
+    });
+  }
+
+  linkSelection
+    .attr('stroke-opacity', (d) =>
+      relatedEdgeIds.has(d.id) ? 1 : getEdgeOpacity(d.data),
+    )
+    .attr('stroke-width', (d) =>
+      relatedEdgeIds.has(d.id)
+        ? Math.max(getEdgeWidth(d.data), 2.4)
+        : getEdgeWidth(d.data),
+    );
+
+  root
+    .selectAll<SVGGElement, GraphNodeDatum>('g[data-node-id]')
+    .select<SVGCircleElement>('circle')
+    .attr('stroke-width', (d) => {
+      if (d.id === selectedNodeId) {
+        return 2.6;
+      }
+
+      if (relatedNodeIds.has(d.id)) {
+        return 2.2;
+      }
+
+      return 1.4;
+    })
+    .attr('filter', (d) =>
+      d.id === selectedNodeId || d.data.isRoot
+        ? 'url(#tabweave-node-glow)'
+        : null,
+    );
 }

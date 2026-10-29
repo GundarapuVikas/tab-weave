@@ -8,23 +8,26 @@ import type {
   RuntimeResponse,
 } from '../../shared/messages';
 import type { EventRecord } from '../../shared/types';
+import { clearAllStores } from '../../lib/db/indexedDb';
 import {
-  clearEdges,
   getEdgesBySession,
   getIncomingEdges,
   getOutgoingEdges,
 } from '../../lib/db/repositories/edgeRepository';
 import {
-  clearEvents,
   getEventsBySession,
   getEventsByTabKey,
 } from '../../lib/db/repositories/eventRepository';
-import { clearMeta } from '../../lib/db/repositories/metaRepository';
-import { clearNodes, getNodeById, getNodesBySession } from '../../lib/db/repositories/nodeRepository';
-import { clearSessions } from '../../lib/db/repositories/sessionRepository';
+import { getNodeById, getNodesBySession } from '../../lib/db/repositories/nodeRepository';
 import { logger } from '../../lib/utils/logger';
-import { ensureActiveSession } from '../bootstrap';
-import { runtimeCache } from './runtimeCache';
+import {
+  ensureActiveSession,
+  ensureActiveSessionLocked,
+  invalidateSessionStateLocked,
+  runExclusiveSessionOp,
+} from '../bootstrap';
+import { writeQueue } from '../queues/writeQueue';
+import { seedExistingTabs } from './graphOrchestrator';
 
 async function handleGetGraph(): Promise<GetGraphResponse | ErrorResponse> {
   const session = await ensureActiveSession();
@@ -33,12 +36,19 @@ async function handleGetGraph(): Promise<GetGraphResponse | ErrorResponse> {
     getEdgesBySession(session.id),
   ]);
 
+  // A partial clear or an in-flight write must never hand d3-force a link
+  // whose endpoint is missing; it throws and blanks the popup.
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const validEdges = edges.filter(
+    (edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to),
+  );
+
   return {
     ok: true,
     data: {
       session,
       nodes,
-      edges,
+      edges: validEdges,
     },
   };
 }
@@ -88,15 +98,23 @@ async function handleGetNodeDetails(nodeId: string): Promise<GetNodeDetailsRespo
 }
 
 async function handleClearData(): Promise<ClearDataResponse> {
-  await Promise.all([
-    clearEdges(),
-    clearEvents(),
-    clearNodes(),
-    clearMeta(),
-    clearSessions(),
-  ]);
+  await runExclusiveSessionOp(async () => {
+    // Invalidate first so any handler still holding the old session cannot
+    // enqueue new events while the stores are being cleared.
+    invalidateSessionStateLocked();
 
-  runtimeCache.clear();
+    writeQueue.clear();
+    await writeQueue.flush();
+
+    await clearAllStores();
+
+    // meta was cleared, so this creates exactly one fresh session.
+    const session = await ensureActiveSessionLocked();
+
+    // Represent the current browser state under the new session rather than
+    // waiting for tabs to be closed and reopened.
+    await seedExistingTabs(session);
+  });
 
   return {
     ok: true,

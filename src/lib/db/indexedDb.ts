@@ -59,10 +59,37 @@ export function getDb(): Promise<IDBPDatabase<TabWeaveDB>> {
           });
         }
       },
+    }).catch((error: unknown) => {
+      // Do not cache a failed open forever; a later attempt may succeed.
+      dbPromise = null;
+      throw error;
     });
   }
 
   return dbPromise;
+}
+
+export async function clearAllStores(): Promise<void> {
+  const db = await getDb();
+  const stores = [
+    STORE_NAMES.sessions,
+    STORE_NAMES.events,
+    STORE_NAMES.nodes,
+    STORE_NAMES.edges,
+    STORE_NAMES.meta,
+  ] as const;
+
+  const tx = db.transaction(stores, 'readwrite');
+
+  await Promise.all([
+    tx.objectStore(STORE_NAMES.sessions).clear(),
+    tx.objectStore(STORE_NAMES.events).clear(),
+    tx.objectStore(STORE_NAMES.nodes).clear(),
+    tx.objectStore(STORE_NAMES.edges).clear(),
+    tx.objectStore(STORE_NAMES.meta).clear(),
+  ]);
+
+  await tx.done;
 }
 
 export async function deleteDatabaseConnection(): Promise<void> {
